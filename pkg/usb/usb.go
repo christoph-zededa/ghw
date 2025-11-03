@@ -15,13 +15,18 @@ import (
 )
 
 type USB struct {
-	Driver     string `json:"driver"`
-	Type       string `json:"type"`
-	VendorID   string `json:"vendor_id"`
-	ProductID  string `json:"product_id"`
-	Product    string `json:"product"`
-	RevisionID string `json:"revision_id"`
-	Interface  string `json:"interface"`
+	Driver       string `json:"driver"`
+	Type         string `json:"type"`
+	VendorID     string `json:"vendor_id"`
+	ProductID    string `json:"product_id"`
+	Product      string `json:"product"`
+	RevisionID   string `json:"revision_id"`
+	Interface    string `json:"interface"`
+	Busnum       string `json:"busnum"`
+	Devnum       string `json:"devnum"`
+	ParentBusnum string `json:"parent_busnum"`
+	ParentDevnum string `json:"parent_devnum"`
+	PCIAddress   string `json:"pci_address"`
 }
 
 func (u USB) String() string {
@@ -35,7 +40,11 @@ func (u USB) String() string {
 		{"productID", u.ProductID},
 		{"product", u.Product},
 		{"revisionID", u.RevisionID},
-		{"interface", u.Interface},
+		{"busnum", u.Busnum},
+		{"devnum", u.Devnum},
+		{"parentBusnum", u.ParentBusnum},
+		{"parentDevnum", u.ParentDevnum},
+		{"pciAddress", u.PCIAddress},
 	}
 
 	var str strings.Builder

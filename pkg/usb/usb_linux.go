@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/jaypipes/ghw/pkg/context"
@@ -53,6 +54,10 @@ func fillUSBFromUevent(dir string, usb *USB) (err error) {
 		val := splits[1]
 
 		switch key {
+		case "BUSNUM":
+			usb.Busnum = val
+		case "DEVNUM":
+			usb.Devnum = val
 		case "DRIVER":
 			usb.Driver = val
 		case "TYPE":
@@ -77,6 +82,19 @@ func slurp(path string) string {
 	}
 
 	return string(bytes.TrimSpace(bs))
+}
+
+// this comes from https://github.com/lf-edge/eve/blob/master/pkg/pillar/cmd/usbmanager/scanusb.go#L24
+func extractPCIAddressFromSysfsPath(path string) string {
+	re := regexp.MustCompile(`\/?devices\/pci[\d:.]*\/(\d{4}:[a-f\d:\.]+)\/`)
+
+	matches := re.FindStringSubmatch(path)
+	if len(matches) != 2 {
+		return ""
+	}
+	pciAddress := matches[1]
+
+	return pciAddress
 }
 
 func usbs(ctx *context.Context) ([]*USB, []error) {
@@ -104,12 +122,27 @@ func usbs(ctx *context.Context) ([]*USB, []error) {
 		usb := USB{}
 
 		err = fillUSBFromUevent(fullDir, &usb)
+		if usb.Busnum == "" || usb.Devnum == "" {
+			continue
+		}
 		if err != nil {
 			errs = append(errs, err)
 		}
 
+		parentFullDir := filepath.Dir(fullDir)
+		parentUsb := USB{}
+		err = fillUSBFromUevent(parentFullDir, &parentUsb)
+		if err == nil && parentUsb.Busnum != "" && parentUsb.Devnum != "" {
+			usb.ParentBusnum = parentUsb.Busnum
+			usb.ParentDevnum = parentUsb.Devnum
+		}
+
 		usb.Interface = slurp(filepath.Join(fullDir, "interface"))
 		usb.Product = slurp(filepath.Join(fullDir, "product"))
+
+		pciAddress := extractPCIAddressFromSysfsPath(strings.TrimPrefix(fullDir, paths.SysRoot))
+		// not every USB controller is on PCI bus, f.e. Raspberry Pi
+		usb.PCIAddress = pciAddress
 
 		usbs = append(usbs, &usb)
 	}
