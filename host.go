@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	"github.com/jaypipes/ghw/pkg/context"
-	"github.com/jaypipes/ghw/pkg/usb"
 
 	"github.com/jaypipes/ghw/pkg/accelerator"
 	"github.com/jaypipes/ghw/pkg/baseboard"
@@ -24,7 +23,9 @@ import (
 	"github.com/jaypipes/ghw/pkg/net"
 	"github.com/jaypipes/ghw/pkg/pci"
 	"github.com/jaypipes/ghw/pkg/product"
+	"github.com/jaypipes/ghw/pkg/serial"
 	"github.com/jaypipes/ghw/pkg/topology"
+	"github.com/jaypipes/ghw/pkg/usb"
 )
 
 // HostInfo is a wrapper struct containing information about the host system's
@@ -44,6 +45,7 @@ type HostInfo struct {
 	Product     *product.Info     `json:"product"`
 	PCI         *pci.Info         `json:"pci"`
 	USB         *usb.Info         `json:"usb"`
+	Serial      *serial.Info      `json:"serial"`
 }
 
 // Host returns a pointer to a HostInfo struct that contains fields with
@@ -103,6 +105,10 @@ func Host(opts ...*WithOption) (*HostInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	serialInfo, err := serial.New(opts...)
+	if err != nil {
+		return nil, err
+	}
 
 	return &HostInfo{
 		ctx:         ctx,
@@ -119,6 +125,7 @@ func Host(opts ...*WithOption) (*HostInfo, error) {
 		Product:     productInfo,
 		PCI:         pciInfo,
 		USB:         usbInfo,
+		Serial:      serialInfo,
 	}, nil
 }
 
@@ -126,7 +133,7 @@ func Host(opts ...*WithOption) (*HostInfo, error) {
 // structs' String-ified output
 func (info *HostInfo) String() string {
 	return fmt.Sprintf(
-		"%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
+		"%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
 		info.Block.String(),
 		info.CPU.String(),
 		info.GPU.String(),
@@ -140,6 +147,7 @@ func (info *HostInfo) String() string {
 		info.Product.String(),
 		info.PCI.String(),
 		info.USB.String(),
+		info.Serial.String(),
 	)
 }
 
