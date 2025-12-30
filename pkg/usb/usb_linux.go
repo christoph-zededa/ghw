@@ -10,12 +10,16 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/jaypipes/ghw/pkg/context"
 	"github.com/jaypipes/ghw/pkg/linuxpath"
 )
+
+var pciBDFRe = regexp.MustCompile(`(?i)\b([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b`)
 
 func (i *Info) load() error {
 	var errs []error
@@ -86,7 +90,14 @@ func usbs(ctx *context.Context) ([]*Device, []error) {
 		return devs, []error{err}
 	}
 
+	acsCache := make(map[string]bool)
+
 	for _, dir := range usbDevicesDirs {
+		// Skip interfaces, only want root devices
+		if strings.Contains(dir.Name(), ":") {
+			continue
+		}
+
 		fullDir, err := os.Readlink(filepath.Join(paths.SysBusUsbDevices, dir.Name()))
 		if err != nil {
 			continue
@@ -107,9 +118,77 @@ func usbs(ctx *context.Context) ([]*Device, []error) {
 
 		dev.Interface = slurp(filepath.Join(fullDir, "interface"))
 		dev.Product = slurp(filepath.Join(fullDir, "product"))
+		dev.Busnum = slurp(filepath.Join(fullDir, "busnum"))
+		dev.Devnum = slurp(filepath.Join(fullDir, "devnum"))
+		dev.Class = slurp(filepath.Join(fullDir, "bDeviceClass"))
+		dev.Subclass = slurp(filepath.Join(fullDir, "bDeviceSubClass"))
+		dev.Protocol = slurp(filepath.Join(fullDir, "bDeviceProtocol"))
+
+		// Parent logic
+		parentDir := filepath.Dir(fullDir)
+		// Check if parent is USB
+		if _, err := os.Stat(filepath.Join(parentDir, "busnum")); err == nil {
+			// It's a USB parent
+			bus := slurp(filepath.Join(parentDir, "busnum"))
+			devnum := slurp(filepath.Join(parentDir, "devnum"))
+			dev.Parent = &BusParent{
+				USB: &USBAddress{Bus: bus, Devnum: devnum},
+			}
+		} else {
+			// Check if parent is PCI
+			parentName := filepath.Base(parentDir)
+			if m := pciBDFRe.FindStringSubmatch(parentName); m != nil {
+				dev.Parent = &BusParent{
+					PCI: &PCIAddress{
+						Domain:   m[1],
+						Bus:      m[2],
+						Device:   m[3],
+						Function: m[4],
+					},
+				}
+			}
+		}
+
+		// ACS Logic
+		pciAddr := findPCIAddress(fullDir)
+		if pciAddr != "" {
+			if enabled, ok := acsCache[pciAddr]; ok {
+				dev.ACSEnabled = enabled
+			} else {
+				enabled = checkACSEnabled(pciAddr)
+				acsCache[pciAddr] = enabled
+				dev.ACSEnabled = enabled
+			}
+		}
 
 		devs = append(devs, &dev)
 	}
 
 	return devs, errs
+}
+
+func findPCIAddress(dir string) string {
+	for {
+		base := filepath.Base(dir)
+		if pciBDFRe.MatchString(base) {
+			return base
+		}
+		if base == "devices" || base == "/" || base == "." || dir == "/" {
+			return ""
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
+func checkACSEnabled(addr string) bool {
+	path, err := exec.LookPath("lspci")
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command(path, "-vv", "-s", addr)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "Access Control Services")
 }
