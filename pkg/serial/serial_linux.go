@@ -10,12 +10,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jaypipes/ghw/pkg/context"
 	"github.com/jaypipes/ghw/pkg/linuxpath"
 )
+
+// Matches PCI BDF anywhere inside a string/path, e.g.
+// 0000:00:02.0, .../0000:00:02.0/... , 0000:00:02.0:0.0
+var pciBDFRe = regexp.MustCompile(`(?i)\b([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b`)
 
 func (i *Info) load() error {
 	var errs []error
@@ -29,79 +35,212 @@ func (i *Info) load() error {
 }
 
 func serials(ctx *context.Context) ([]*Device, []error) {
-	devs := make([]*Device, 0)
-	errs := []error{}
-
 	paths := linuxpath.New(ctx)
-	ttyDirs, err := os.ReadDir(paths.SysClassTty)
+	ttyClass := paths.SysClassTty
+	ttys, err := filepath.Glob(filepath.Join(ttyClass, "ttyS*"))
 	if err != nil {
-		// If the directory doesn't exist, it's not an error, just no devices
-		if os.IsNotExist(err) {
-			return devs, nil
-		}
-		return devs, []error{err}
+		return nil, []error{err}
 	}
 
+	// Deterministic order: ttyS0, ttyS1, ...
+	sort.Slice(ttys, func(i, j int) bool {
+		return filepath.Base(ttys[i]) < filepath.Base(ttys[j])
+	})
+
+	var out []*Device
 	id := 1
-	for _, dir := range ttyDirs {
-		ttyName := dir.Name()
-		ttyPath := filepath.Join(paths.SysClassTty, ttyName)
+	for _, ttyDir := range ttys {
+		tty := filepath.Base(ttyDir) // ttyS1
+		sp, ok, err := serialPortFromTTY(paths.SysRoot, ttyClass, tty)
+		if err != nil {
+			continue
+		}
+		if ok {
+			sp.Name = fmt.Sprintf("COM%d", id)
+			out = append(out, sp)
+			id++
+		}
+	}
+	return out, nil
+}
 
-		devicePath := filepath.Join(ttyPath, "device")
-		resourcesPath := filepath.Join(devicePath, "resources")
-		irqPath := filepath.Join(ttyPath, "irq")
+func serialPortFromTTY(sysfs, ttyClass, tty string) (*Device, bool, error) {
+	ttyDir := filepath.Join(ttyClass, tty)
 
-		var io, irq string
+	// Must have /sys/class/tty/<tty>/device symlink to be hardware-backed.
+	devLink := filepath.Join(ttyDir, "device")
+	devSys, err := filepath.EvalSymlinks(devLink)
+	if err != nil {
+		return nil, false, nil
+	}
 
-		if _, err := os.Stat(resourcesPath); err == nil {
-			io, irq = parseResources(resourcesPath)
-		} else if runtime.GOARCH == "arm64" {
-			if _, err := os.Stat(irqPath); err == nil {
-				content, _ := os.ReadFile(irqPath)
-				irqVal := strings.TrimSpace(string(content))
-				if irqVal != "" && irqVal != "0" {
-					irq = irqVal
+	irq, _ := readUintDecimal(filepath.Join(ttyDir, "irq"))
+	ioType, _ := readUintDecimal(filepath.Join(ttyDir, "io_type"))
+	portBase, portOK := readUintHex(filepath.Join(ttyDir, "port"))
+
+	ioRange := ""
+	if portOK && isIOPortUART(ioType) {
+		start := portBase
+		end := portBase + 7 // 8250 register block: 8 bytes
+
+		// Optional: clamp to containing PCI IO BAR if we can find it.
+		if pciDir, ok := findPCIDeviceDirFromResolvedDevice(sysfs, devSys); ok {
+			if barStart, barEnd, ok := findContainingPCIIoBAR(pciDir, start); ok {
+				if start < barStart {
+					start = barStart
+				}
+				if end > barEnd {
+					end = barEnd
 				}
 			}
 		}
 
-		if io != "" || irq != "" {
-			dev := &Device{
-				Name:    fmt.Sprintf("COM%d", id),
-				Address: fmt.Sprintf("/dev/%s", ttyName),
-				IO:      io,
-				IRQ:     irq,
-			}
-			devs = append(devs, dev)
-			id++
+		ioRange = fmt.Sprintf("%04x-%04x", start, end)
+	}
+
+	// We don't have Parent in Device struct yet, so we skip it for now.
+	// But we can use the info to populate existing fields.
+
+	var parent *BusParent
+	if pciAddr, ok := pciAddressFromString(devSys); ok {
+		parent = &BusParent{
+			PCI: pciAddr,
 		}
 	}
 
-	return devs, errs
+	sp := &Device{
+		Address: "/dev/" + tty,
+		IO:      ioRange,
+		IRQ:     fmt.Sprintf("%d", irq),
+		Parent:  parent,
+	}
+	return sp, true, nil
 }
 
-func parseResources(path string) (string, string) {
-	f, err := os.Open(path)
+func isIOPortUART(ioType uint64) bool {
+	// For ttyS* this is commonly 0 for IO port access.
+	return ioType == 0
+}
+
+func pciAddressFromString(s string) (*PCIAddress, bool) {
+	m := pciBDFRe.FindStringSubmatch(s)
+	if m == nil {
+		return nil, false
+	}
+	return &PCIAddress{
+		Domain:   m[1],
+		Bus:      m[2],
+		Device:   m[3],
+		Function: m[4],
+	}, true
+}
+
+func findPCIDeviceDirFromResolvedDevice(sysfs, devSys string) (string, bool) {
+	addr, ok := pciAddressFromString(devSys)
+	if !ok {
+		return "", false
+	}
+
+	// Common layout:
+	// /sys/devices/pci0000:00/0000:00:02.0
+	pciRoot := fmt.Sprintf("pci%s:%s", addr.Domain, addr.Bus)
+	bdf := fmt.Sprintf("%s:%s:%s.%s", addr.Domain, addr.Bus, addr.Device, addr.Function)
+	candidate := filepath.Join(sysfs, "devices", pciRoot, bdf)
+	if statOK(candidate) {
+		return candidate, true
+	}
+
+	// Fallback: walk up from devSys looking for base == BDF.
+	cur := devSys
+	for i := 0; i < 32; i++ {
+		if filepath.Base(cur) == bdf && statOK(cur) {
+			return cur, true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	return "", false
+}
+
+func readUintDecimal(path string) (uint64, error) {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", ""
+		return 0, err
+	}
+	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return 0, fmt.Errorf("empty")
+	}
+	return strconv.ParseUint(s, 10, 64)
+}
+
+func readUintHex(path string) (uint64, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "0" {
+		return 0, false
+	}
+	s = strings.TrimPrefix(s, "0x")
+	v, err := strconv.ParseUint(s, 16, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func statOK(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// Parse <pci>/resource and find the IO BAR that contains port.
+// resource format: "start end flags" per line, hex.
+func findContainingPCIIoBAR(pciDevDir string, port uint64) (start, end uint64, ok bool) {
+	f, err := os.Open(filepath.Join(pciDevDir, "resource"))
+	if err != nil {
+		return 0, 0, false
 	}
 	defer f.Close()
 
-	var io, irq string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "io ") {
-			// Replicate: sed -e 's#io 0x##' -e 's#0x##'
-			line = strings.TrimPrefix(line, "io 0x")
-			line = strings.Replace(line, "0x", "", -1)
-			io = line
-		} else if strings.HasPrefix(line, "irq ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				irq = parts[1]
-			}
+	const IORESOURCE_IO = 0x00000100
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		st, err0 := parseHex(fields[0])
+		en, err1 := parseHex(fields[1])
+		fl, err2 := parseHex(fields[2])
+		if err0 != nil || err1 != nil || err2 != nil {
+			continue
+		}
+		if st == 0 && en == 0 {
+			continue
+		}
+		if (fl & IORESOURCE_IO) == 0 {
+			continue
+		}
+		if port >= st && port <= en {
+			return st, en, true
 		}
 	}
-	return io, irq
+	return 0, 0, false
+}
+
+func parseHex(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "0x")
+	return strconv.ParseUint(s, 16, 64)
 }

@@ -13,11 +13,29 @@ import (
 	"github.com/jaypipes/ghw/pkg/option"
 )
 
+type PCIAddress struct {
+	Domain   string `json:"domain"`
+	Bus      string `json:"bus"`
+	Device   string `json:"device"`
+	Function string `json:"function"`
+}
+
+type USBAddress struct {
+	Bus    string `json:"bus"`
+	Devnum string `json:"devnum"`
+}
+
+type BusParent struct {
+	PCI *PCIAddress `json:"pci,omitempty"`
+	USB *USBAddress `json:"usb,omitempty"`
+}
+
 type Device struct {
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	IO      string `json:"io"`
-	IRQ     string `json:"irq"`
+	Name    string     `json:"name"`
+	Address string     `json:"address"`
+	IO      string     `json:"io"`
+	IRQ     string     `json:"irq"`
+	Parent  *BusParent `json:"parent,omitempty"`
 }
 
 func (d Device) String() string {
