@@ -8,6 +8,7 @@ package ghw
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/jaypipes/ghw/pkg/context"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/jaypipes/ghw/pkg/baseboard"
 	"github.com/jaypipes/ghw/pkg/bios"
 	"github.com/jaypipes/ghw/pkg/block"
+	"github.com/jaypipes/ghw/pkg/can"
 	"github.com/jaypipes/ghw/pkg/chassis"
 	"github.com/jaypipes/ghw/pkg/cpu"
 	"github.com/jaypipes/ghw/pkg/gpu"
@@ -25,7 +27,9 @@ import (
 	"github.com/jaypipes/ghw/pkg/product"
 	"github.com/jaypipes/ghw/pkg/serial"
 	"github.com/jaypipes/ghw/pkg/topology"
+	"github.com/jaypipes/ghw/pkg/tpm"
 	"github.com/jaypipes/ghw/pkg/usb"
+	"github.com/jaypipes/ghw/pkg/watchdog"
 )
 
 // HostInfo is a wrapper struct containing information about the host system's
@@ -46,6 +50,10 @@ type HostInfo struct {
 	PCI         *pci.Info         `json:"pci"`
 	USB         *usb.Info         `json:"usb"`
 	Serial      *serial.Info      `json:"serial"`
+	CAN         *can.Info         `json:"can"`
+	TPM         *tpm.Info         `json:"tpm"`
+	Watchdog    *watchdog.Info    `json:"watchdog"`
+	StatusLED   bool              `json:"status_led"`
 }
 
 // Host returns a pointer to a HostInfo struct that contains fields with
@@ -109,6 +117,24 @@ func Host(opts ...*WithOption) (*HostInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	canInfo, err := can.New(opts...)
+	if err != nil {
+		return nil, err
+	}
+	tpmInfo, err := tpm.New(opts...)
+	if err != nil {
+		return nil, err
+	}
+	watchdogInfo, err := watchdog.New(opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Simple check for LEDs
+	statusLED := false
+	if entries, err := os.ReadDir("/sys/class/leds"); err == nil && len(entries) > 0 {
+		statusLED = true
+	}
 
 	return &HostInfo{
 		ctx:         ctx,
@@ -126,6 +152,10 @@ func Host(opts ...*WithOption) (*HostInfo, error) {
 		PCI:         pciInfo,
 		USB:         usbInfo,
 		Serial:      serialInfo,
+		CAN:         canInfo,
+		TPM:         tpmInfo,
+		Watchdog:    watchdogInfo,
+		StatusLED:   statusLED,
 	}, nil
 }
 
@@ -133,7 +163,7 @@ func Host(opts ...*WithOption) (*HostInfo, error) {
 // structs' String-ified output
 func (info *HostInfo) String() string {
 	return fmt.Sprintf(
-		"%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
+		"%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\nStatusLED: %v\n",
 		info.Block.String(),
 		info.CPU.String(),
 		info.GPU.String(),
@@ -148,6 +178,10 @@ func (info *HostInfo) String() string {
 		info.PCI.String(),
 		info.USB.String(),
 		info.Serial.String(),
+		info.CAN.String(),
+		info.TPM.String(),
+		info.Watchdog.String(),
+		info.StatusLED,
 	)
 }
 
