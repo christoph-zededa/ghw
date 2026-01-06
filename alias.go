@@ -25,6 +25,7 @@ import (
 	"github.com/jaypipes/ghw/pkg/topology"
 	"github.com/jaypipes/ghw/pkg/tpm"
 	"github.com/jaypipes/ghw/pkg/usb"
+	"github.com/jaypipes/ghw/pkg/watchdog"
 )
 
 type WithOption = option.Option
@@ -217,4 +218,10 @@ type TPMInfo = tpm.Info
 
 var (
 	TPM = tpm.New
+)
+
+type WatchdogInfo = watchdog.Info
+
+var (
+	Watchdog = watchdog.New
 )
