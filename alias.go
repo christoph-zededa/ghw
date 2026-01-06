@@ -23,6 +23,7 @@ import (
 	"github.com/jaypipes/ghw/pkg/product"
 	"github.com/jaypipes/ghw/pkg/serial"
 	"github.com/jaypipes/ghw/pkg/topology"
+	"github.com/jaypipes/ghw/pkg/tpm"
 	"github.com/jaypipes/ghw/pkg/usb"
 )
 
@@ -210,4 +211,10 @@ type CANInfo = can.Info
 
 var (
 	CAN = can.New
+)
+
+type TPMInfo = tpm.Info
+
+var (
+	TPM = tpm.New
 )
