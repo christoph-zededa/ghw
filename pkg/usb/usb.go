@@ -46,6 +46,7 @@ type Device struct {
 	Subclass   string     `json:"subclass"`
 	Protocol   string     `json:"protocol"`
 	ACSEnabled bool       `json:"acs_enabled"`
+	Controller string     `json:"controller,omitempty"`
 }
 
 func (d Device) String() string {
@@ -60,6 +61,7 @@ func (d Device) String() string {
 		{"product", d.Product},
 		{"revisionID", d.RevisionID},
 		{"interface", d.Interface},
+		{"pci_address", d.Controller},
 	}
 
 	var str strings.Builder

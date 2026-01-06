@@ -151,6 +151,7 @@ func usbs(ctx *context.Context) ([]*Device, []error) {
 
 		// ACS Logic
 		pciAddr := findPCIAddress(fullDir)
+		dev.Controller = pciAddr
 		if pciAddr != "" {
 			if enabled, ok := acsCache[pciAddr]; ok {
 				dev.ACSEnabled = enabled
