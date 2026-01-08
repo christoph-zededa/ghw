@@ -22,8 +22,8 @@ type PCIAddress struct {
 }
 
 type USBAddress struct {
-	Bus    string `json:"bus"`
-	Devnum string `json:"devnum"`
+	Busnum uint16 `json:"bus"`
+	Port   string `json:"port"`
 }
 
 type BusParent struct {
@@ -32,24 +32,30 @@ type BusParent struct {
 }
 
 type Device struct {
-	Driver     string     `json:"driver"`
-	Type       string     `json:"type"`
-	VendorID   string     `json:"vendor_id"`
-	ProductID  string     `json:"product_id"`
-	Product    string     `json:"product"`
-	RevisionID string     `json:"revision_id"`
-	Interface  string     `json:"interface"`
-	Busnum     string     `json:"busnum"`
-	Devnum     string     `json:"devnum"`
-	Parent     *BusParent `json:"parent,omitempty"`
-	Class      string     `json:"class"`
-	Subclass   string     `json:"subclass"`
-	Protocol   string     `json:"protocol"`
-	ACSEnabled bool       `json:"acs_enabled"`
-	Controller string     `json:"controller,omitempty"`
+	Driver     string    `json:"driver"`
+	Type       string    `json:"type"`
+	VendorID   string    `json:"vendor_id"`
+	ProductID  string    `json:"product_id"`
+	Product    string    `json:"product"`
+	RevisionID string    `json:"revision_id"`
+	Interface  string    `json:"interface"`
+	Devnum     string    `json:"devnum"`
+	Parent     BusParent `json:"parent,omitempty"`
+	Class      string    `json:"class"`
+	Subclass   string    `json:"subclass"`
+	Protocol   string    `json:"protocol"`
+	Controller string    `json:"controller,omitempty"`
+	USBAddress
 }
 
 func (d Device) String() string {
+	address := ""
+	if d.Port != "" {
+		address = fmt.Sprintf("%d-%s", d.Busnum, d.Port)
+	} else {
+		fmt.Printf(">>> empty port: %s for %s/%s", d.Port, d.VendorID, d.ProductID)
+	}
+
 	kvs := []struct {
 		name  string
 		value string
@@ -62,6 +68,26 @@ func (d Device) String() string {
 		{"revisionID", d.RevisionID},
 		{"interface", d.Interface},
 		{"pci_address", d.Controller},
+		{"address", address},
+	}
+
+	if d.Parent.PCI != nil {
+		kvs = append(kvs, struct {
+			name  string
+			value string
+		}{
+			name:  "parent-pci",
+			value: fmt.Sprintf("%s:%s:%s.%s", d.Parent.PCI.Domain, d.Parent.PCI.Bus, d.Parent.PCI.Device, d.Parent.PCI.Function),
+		})
+	}
+	if d.Parent.USB != nil {
+		kvs = append(kvs, struct {
+			name  string
+			value string
+		}{
+			name:  "parent-usb",
+			value: fmt.Sprintf("%d-%s", d.Parent.USB.Busnum, d.Parent.USB.Port),
+		})
 	}
 
 	var str strings.Builder
